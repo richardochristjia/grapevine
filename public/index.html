@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grapevine</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:12px;font:14px/1.4 system-ui,sans-serif;background:#111;color:#eee;max-width:720px;margin-inline:auto}
+h2{font-size:15px;margin:20px 0 8px}
+input,button{font:inherit;padding:8px;border-radius:6px;border:1px solid #444;background:#1c1c1c;color:#eee}
+input{width:100%;margin-bottom:6px}
+button{cursor:pointer}
+button.on{background:#333;border-color:#888}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:600;color:#000}
+.Green{background:#4c4}.Yellow{background:#ec4}.Red{background:#f55}.unknown{background:#999}
+.card,.recap{border:1px solid #333;border-radius:8px;padding:10px;margin-top:8px;overflow-wrap:anywhere}
+.recap p{margin:4px 0 0;white-space:pre-wrap}
+.muted{color:#999;font-size:12px}
+ul{padding-left:18px;margin:4px 0}
+table{width:100%;border-collapse:collapse}
+td,th{text-align:left;padding:4px 6px 4px 0;border-bottom:1px solid #222;overflow-wrap:anywhere}
+.note{position:fixed;left:0;right:0;bottom:0;background:#222;color:#ccc;padding:6px 12px;font-size:12px;text-align:center;border-top:1px solid #444}
+body{padding-bottom:44px}
+</style>
+</head>
+<body>
+<h1 style="font-size:18px;margin:0 0 8px">Grapevine</h1>
+<form id="f"><input id="mint" placeholder="Solana token mint" autocomplete="off" spellcheck="false"><button>Analyze</button></form>
+<div id="card"></div>
+<h2>Recaps</h2>
+<div class="tabs" id="tabs"></div>
+<div id="recaps"></div>
+<h2>Running now</h2>
+<div id="running"></div>
+<h2>Best calls (7d)</h2>
+<div id="best"></div>
+<div class="note">Green = no red flags found, not safe. Not financial advice.</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
+const wib = (iso) => iso ? new Date(iso).toLocaleString("en-GB", { timeZone: "Asia/Jakarta", hour12: false, dateStyle: "short", timeStyle: "short" }) + " WIB" : "";
+const badge = (v) => el("span", v, "badge " + (["Green", "Yellow", "Red"].includes(v) ? v : "unknown"));
+const api = async (p) => { const r = await fetch(p); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; };
+const show = (box, ...kids) => box.replaceChildren(...kids);
+const short = (m) => m.slice(0, 4) + "…" + m.slice(-4);
+
+function flagList(title, flags) {
+  const d = el("div"); d.append(el("strong", title));
+  const ul = el("ul"); for (const f of flags) ul.append(el("li", f.message + " (+" + f.points + ")"));
+  d.append(ul); return d;
+}
+function card(r) {
+  const c = el("div", null, "card");
+  c.append(badge(r.verdict), el("span", " score " + r.score + " " + (r.symbol || short(r.mint))));
+  const hard = r.flags.filter((f) => f.severity === "hard"), soft = r.flags.filter((f) => f.severity === "soft");
+  if (hard.length) c.append(flagList("Hard flags", hard));
+  if (soft.length) c.append(flagList("Soft flags", soft));
+  if (!r.flags.length) c.append(el("p", "No flags found."));
+  c.append(el("p", "Checked: " + (r.checked.join(", ") || "none"), "muted"));
+  c.append(el("p", "Unknown: " + (r.unknown.join(", ") || "none"), "muted"));
+  c.append(el("p", "Not checked: " + (r.notChecked.join(", ") || "none"), "muted"));
+  c.append(el("p", wib(r.fetchedAt), "muted"));
+  return c;
+}
+$("f").onsubmit = async (e) => {
+  e.preventDefault();
+  show($("card"), el("p", "Analyzing…", "muted"));
+  try { show($("card"), card(await api("/api/analyze/" + encodeURIComponent($("mint").value.trim()))); }
+  catch (x) { show($("card"), el("p", "Error: " + x.message)); }
+};
+
+const KINDS = [["hourly", "Hourly"], ["24h", "24h"], ["asia", "Asia"], ["europe", "Europe"], ["us", "US"]];
+async function loadRecaps(kind) {
+  for (const b of $("tabs").children) b.className = b.dataset.k === kind ? "on" : "";
+  try {
+    const rs = await api("/api/recaps?kind=" + kind);
+    show($("recaps"), ...(rs.length ? rs.map((r) => { const d = el("div", null, "recap"); d.append(el("div", wib(r.at) + (r.llm ? "" : " (template)"), "muted"), el("p", r.text)); return d; }) : [el("p", "No recaps yet.", "muted")]));
+  } catch (x) { show($("recaps"), el("p", "Error: " + x.message)); }
+}
+for (const [k, label] of KINDS) { const b = el("button", label); b.type = "button"; b.dataset.k = k; b.onclick = () => loadRecaps(k); $("tabs").append(b); }
+
+async function loadRunning() {
+  try {
+    const r = await api("/api/running");
+    const rows = (r.tokens || []).map((t) => { const d = el("div"); d.append(badge(t.verdict), el("span", " " + (t.symbol || short(t.mint)) + " " + short(t.mint), "muted")); return d; });
+    show($("running"), el("p", r.at ? "Updated " + wib(r.at) : "No data yet.", "muted"), ...rows);
+  } catch (x) { show($("running"), el("p", "Error: " + x.message)); }
+}
+async function loadBest() {
+  try {
+    const rs = await api("/api/best-calls");
+    const t = el("table"); const h = el("tr"); for (const x of ["Token", "First", "Now", "x"]) h.append(el("th", x)); t.append(h);
+    const f = (n) => "$" + Math.round(n).toLocaleString("en-US");
+    for (const r of rs) { const tr = el("tr"); for (const x of [r.symbol || short(r.mint), f(r.firstMcap), f(r.nowMcap), r.multiple.toFixed(1) + "x"]) tr.append(el("td", x)); t.append(tr); }
+    show($("best"), rs.length ? t : el("p", "No calls yet.", "muted"));
+  } catch (x) { show($("best"), el("p", "Error: " + x.message)); }
+}
+loadRecaps("hourly"); loadRunning(); loadBest();
+</script>
+</body>
+</html>
